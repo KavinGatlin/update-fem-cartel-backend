@@ -6,7 +6,7 @@ const sendToken = (user, statusCode, res) => {
 
     const options = {
         httpOnly: true,
-        maxAge: (process.env.COOKIE_EXPIRE || 7) * 24 * 60 * 60 * 1000, // Default to 7 days
+        //maxAge: (process.env.COOKIE_EXPIRE || 7) * 24 * 60 * 60 * 1000,
         sameSite: process.env.NODE_ENV === "development" ? "lax" : "none",
         secure: process.env.NODE_ENV === "production",
     };
