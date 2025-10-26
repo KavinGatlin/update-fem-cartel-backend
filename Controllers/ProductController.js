@@ -128,8 +128,6 @@ export const newProduct = [upload.any(), async (req, res) => {
 }];
 
 
-
-
 export const updateProduct = [
     upload.any(),
     catchAsyncErrors(async (req, res) => {
@@ -144,6 +142,7 @@ export const updateProduct = [
             const product = await Product.findById(id);
             if (!product) return res.status(404).json({ message: "Product not found" });
 
+            // Validate category and subcategory
             if (category) {
                 if (!mongoose.Types.ObjectId.isValid(category)) {
                     return res.status(400).json({ message: "Invalid Category ID" });
@@ -164,56 +163,97 @@ export const updateProduct = [
                 product.subcategory = subcategory;
             }
 
-            // Update color variants if provided
-            if (req.files.some(file => file.fieldname.startsWith("colorImages"))) {
-                if (product.colors.length > 0) {
-                    const allColorPublicIds = [];
-                    product.colors.forEach(color => {
-                        if (color.photos && color.photos.length > 0) {
-                            color.photos.forEach(photo => {
-                                if (photo.public_id) allColorPublicIds.push(photo.public_id);
-                            });
+            // Handle color variants update
+            const numColorVariants = parseInt(req.body.numColorVariants, 10) || 0;
+            let updatedColors = [];
+
+            for (let i = 0; i < numColorVariants; i++) {
+                const colorName = req.body[`colorName${i}`]?.trim() || `Color ${i + 1}`;
+
+                // Handle photos to delete
+                const deletePhotosStr = req.body[`deletePhotos${i}`];
+                if (deletePhotosStr) {
+                    try {
+                        const photosToDelete = JSON.parse(deletePhotosStr);
+                        if (photosToDelete.length > 0) {
+                            await deleteFromCloudinary(photosToDelete);
                         }
-                    });
-                    if (allColorPublicIds.length > 0) await deleteFromCloudinary(allColorPublicIds);
+                    } catch (err) {
+                        console.error("Error deleting photos:", err);
+                    }
                 }
 
-                const numColorVariants = parseInt(req.body.numColorVariants, 10) || 0;
-                let updatedColors = [];
-                for (let i = 0; i < numColorVariants; i++) {
-                    const colorName = req.body[`colorName${i}`]?.trim() || `Color ${i + 1}`;
-                    const colorSizesStr = req.body[`colorSizes${i}`] || "";
-                    const colorStocksStr = req.body[`colorStocks${i}`] || "";
-                    const sizesArr = colorSizesStr.split(",").map(s => s.trim()).filter(s => s);
-                    const stocksArr = colorStocksStr.split(",").map(s => Number(s.trim())).filter(s => !isNaN(s));
-                    const sizeVariants = sizesArr.map((size, index) => ({
-                        size,
-                        stock: stocksArr[index] !== undefined ? stocksArr[index] : 0,
-                    }));
-                    const colorSeamSizesStr = req.body[`colorSeamSizes${i}`] || "";
-                    const colorSeamStocksStr = req.body[`colorSeamStocks${i}`] || "";
-                    const seamSizesArr = colorSeamSizesStr.split(",").map(s => s.trim()).filter(s => s);
-                    const seamStocksArr = colorSeamStocksStr.split(",").map(s => Number(s.trim())).filter(s => !isNaN(s));
-                    const seamSizeVariants = seamSizesArr.map((seamSize, index) => ({
-                        seamSize: Number(seamSize),
-                        stock: seamStocksArr[index] !== undefined ? seamStocksArr[index] : 0,
-                    }));
-                    const colorFiles = req.files.filter(file => file.fieldname === `colorImages${i}`);
-                    let colorPhotos = [];
-                    if (colorFiles.length > 0) {
-                        colorPhotos = await Promise.all(
-                            colorFiles.map(async (file) => await uploadFileToCloudinary(file.buffer, "colors"))
-                        );
-                    }
-                    updatedColors.push({
-                        colorName,
-                        photos: colorPhotos,
-                        sizes: sizeVariants,
-                        seamSizes: seamSizeVariants,
-                    });
+                // Handle dedicated color image upload
+                let colorImage = null;
+                const dedicatedFile = req.files.find(
+                    (file) => file.fieldname === `colorImage${i}`
+                );
+                if (dedicatedFile) {
+                    colorImage = await uploadFileToCloudinary(dedicatedFile.buffer, "colorImages");
+                } else if (product.colors[i]?.colorImage) {
+                    // Keep existing color image if no new one uploaded
+                    colorImage = product.colors[i].colorImage;
                 }
-                product.colors = updatedColors;
+
+                // Handle sizes and stocks
+                const colorSizesStr = req.body[`colorSizes${i}`] || "";
+                const colorStocksStr = req.body[`colorStocks${i}`] || "";
+                const sizesArr = colorSizesStr.split(",").map(s => s.trim()).filter(s => s);
+                const stocksArr = colorStocksStr.split(",").map(s => Number(s.trim())).filter(s => !isNaN(s));
+                const sizeVariants = sizesArr.map((size, index) => ({
+                    size,
+                    stock: stocksArr[index] !== undefined ? stocksArr[index] : 0,
+                }));
+
+                // Handle seam sizes and stocks
+                const colorSeamSizesStr = req.body[`colorSeamSizes${i}`] || "";
+                const colorSeamStocksStr = req.body[`colorSeamStocks${i}`] || "";
+                const seamSizesArr = colorSeamSizesStr.split(",").map(s => s.trim()).filter(s => s);
+                const seamStocksArr = colorSeamStocksStr.split(",").map(s => Number(s.trim())).filter(s => !isNaN(s));
+                const seamSizeVariants = seamSizesArr.map((seamSize, index) => ({
+                    seamSize: Number(seamSize),
+                    stock: seamStocksArr[index] !== undefined ? seamStocksArr[index] : 0,
+                }));
+
+                // Handle new color photos upload
+                const colorFiles = req.files.filter(file => file.fieldname === `colorImages${i}`);
+                let colorPhotos = [];
+
+                // Keep existing photos that weren't deleted
+                if (product.colors[i]?.photos) {
+                    const deletePhotosStr = req.body[`deletePhotos${i}`];
+                    let photosToDelete = [];
+                    if (deletePhotosStr) {
+                        try {
+                            photosToDelete = JSON.parse(deletePhotosStr);
+                        } catch (err) {
+                            photosToDelete = [];
+                        }
+                    }
+
+                    colorPhotos = product.colors[i].photos.filter(
+                        photo => !photosToDelete.includes(photo.public_id)
+                    );
+                }
+
+                // Add new photos
+                if (colorFiles.length > 0) {
+                    const newPhotos = await Promise.all(
+                        colorFiles.map(async (file) => await uploadFileToCloudinary(file.buffer, "colors"))
+                    );
+                    colorPhotos = [...colorPhotos, ...newPhotos];
+                }
+
+                updatedColors.push({
+                    colorName,
+                    colorImage,
+                    photos: colorPhotos,
+                    sizes: sizeVariants,
+                    seamSizes: seamSizeVariants,
+                });
             }
+
+            product.colors = updatedColors;
 
             // Update other fields
             if (name) product.name = name;
@@ -222,7 +262,11 @@ export const updateProduct = [
 
             await product.save();
 
-            res.status(200).json({ success: true, message: "Product updated successfully", product });
+            res.status(200).json({
+                success: true,
+                message: "Product updated successfully",
+                product
+            });
         } catch (error) {
             console.error("Error updating product:", error);
             res.status(500).json({ message: "Server error", error: error.message });
@@ -230,6 +274,9 @@ export const updateProduct = [
     })
 ];
 
+
+
+           
 
 export const getLowStockProducts = catchAsyncErrors(async (req, res) => {
     // Low-stock endpoint should be reworked to calculate overall stock from variant stocks if needed.
