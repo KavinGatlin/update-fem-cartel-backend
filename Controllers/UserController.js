@@ -62,9 +62,7 @@ export const googleLogin = async (req, res) => {
         }
 
         // Generate JWT for your app
-        const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-            expiresIn: process.env.JWT_EXPIRE || "7d",
-        });
+        const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
 
         res.status(200).json({
             success: true,
